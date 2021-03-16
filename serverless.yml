@@ -1,0 +1,117 @@
+service: blah
+
+frameworkVersion: '2'
+
+plugins:
+  - serverless-webpack
+  - serverless-s3-sync
+  - serverless-apigw-binary
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  stage: ${opt:stage, 'dev'}
+  lambdaHashingVersion: 20201221
+  variablesResolutionMode: 20210219
+  apiGateway:
+    shouldStartNameWithService: true
+
+custom:
+  bucketName:
+    Ref: ClientAssetsBucket
+  bucketHostname:
+    Fn::GetAtt [ClientAssetsBucket, DomainName]
+  s3Sync:
+    - bucketName: ${self:custom.bucketName}
+      localDir: .nuxt/dist/client
+    - bucketName: ${self:custom.bucketName}
+      localDir: static
+  apigwBinary:
+    types:
+      - '*/*'
+
+functions:
+  renderer:
+    handler: src/lambda/renderer.handler
+    memorySize: 2048
+    timeout: 30
+    environment:
+      NODE_ENV: production
+    package:
+      include:
+        - .nuxt/dist/serverless.js
+        - .nuxt/dist/server/**
+      exclude:
+        - .nuxt/**
+        - src/**
+        - app.js
+        - nuxt.config.js
+        - README.md
+        - server.js
+        - serverless.js
+        - serverless.yml
+        - webpack.config.js
+        - yarn-error.log
+    events:
+      - http:
+          path: /
+          method: any
+      - http:
+          path: /{proxy+}
+          method: any
+      - http:
+          path: /_nuxt/{proxy+}
+          method: any
+          integration: http-proxy
+          request:
+            uri: https://${self:custom.bucketHostname}/{proxy}
+            parameters:
+              paths:
+                proxy: true
+      - http:
+          path: /static/{proxy+}
+          method: any
+          integration: http-proxy
+          request:
+            uri: https://${self:custom.bucketHostname}/{proxy}
+            parameters:
+              paths:
+                proxy: true
+
+resources:
+  Resources:
+    ClientAssetsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        CorsConfiguration:
+          CorsRules:
+            -
+              AllowedOrigins:
+                - '*'
+              AllowedHeaders:
+                - '*'
+              AllowedMethods:
+                - GET
+                - HEAD
+                - PUT
+                - POST
+                - DELETE
+              MaxAge: 3000
+              ExposedHeaders:
+                - x-amz-server-side-encryption
+                - x-amz-request-id
+                - x-amz-id-2
+    ClientAssetsBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket:
+          Ref: ClientAssetsBucket
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Action: s3:GetObject,
+              Effect: Allow
+              Resource: {
+                Fn::Join: ['', ['arn:aws:s3:::', { Ref: ClientAssetsBucket }, '/*']],
+              }
+              Principal: '*'
